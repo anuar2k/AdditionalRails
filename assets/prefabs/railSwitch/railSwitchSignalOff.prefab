@@ -5,9 +5,6 @@
     "Signalling:SignalConsumerStatus": {
         "hasSignal": false
     },
-    "AdditionalRails:RailSwitch": {
-        "isOn": false,
-        "hasSignal": false,
-        "mode": 1
+    "AdditionalRails:RailSwitchSignal": {
     }
 }

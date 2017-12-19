@@ -1,6 +1,5 @@
 {
-    "AdditionalRails:RailSwitch": {
-        "isOn": true,
-        "mode": 0
+    "AdditionalRails:RailSwitchLever": {
+        "isOn": true
     }
 }

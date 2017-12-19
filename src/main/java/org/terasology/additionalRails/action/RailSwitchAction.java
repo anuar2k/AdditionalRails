@@ -1,19 +1,17 @@
 package org.terasology.additionalRails.action;
 
-import org.terasology.additionalRails.components.RailSwitchComponent;
+import org.terasology.additionalRails.components.RailSwitchLeverComponent;
+import org.terasology.additionalRails.components.RailSwitchSignalComponent;
 import org.terasology.entitySystem.entity.EntityRef;
 import org.terasology.entitySystem.entity.lifecycleEvents.OnChangedComponent;
-import org.terasology.entitySystem.event.Event;
 import org.terasology.entitySystem.event.ReceiveEvent;
 import org.terasology.entitySystem.systems.BaseComponentSystem;
 import org.terasology.entitySystem.systems.RegisterMode;
 import org.terasology.entitySystem.systems.RegisterSystem;
 import org.terasology.logic.common.ActivateEvent;
-import org.terasology.logic.console.Console;
 import org.terasology.math.SideBitFlag;
 import org.terasology.minecarts.blocks.RailComponent;
 import org.terasology.minecarts.blocks.RailsUpdateFamily;
-import org.terasology.registry.CoreRegistry;
 import org.terasology.registry.In;
 import org.terasology.signalling.components.SignalConsumerStatusComponent;
 import org.terasology.world.BlockEntityRegistry;
@@ -22,10 +20,12 @@ import org.terasology.world.block.Block;
 import org.terasology.world.block.BlockComponent;
 import org.terasology.math.geom.Vector3i;
 import org.terasology.world.block.BlockManager;
-import org.terasology.world.block.family.BlockFamily;
 
-import java.text.MessageFormat;
-
+/**
+ * Class describing railSwitch's behavior.
+ * @author Aleksander Wójtowicz <anuar2k@outlook.com>
+ * Code below is inspired by Marcin Sciesinki's Signalling module and michaelpollind's Rails module
+ */
 @RegisterSystem(RegisterMode.AUTHORITY)
 public class RailSwitchAction extends BaseComponentSystem {
 
@@ -34,134 +34,100 @@ public class RailSwitchAction extends BaseComponentSystem {
     @In
     private BlockEntityRegistry blockEntityRegistry;
     @In
-    private Console console;
+    private BlockManager blockManager;
 
     private Block railSwitchLeverOff;
     private Block railSwitchLeverOn;
     private Block railSwitchSignalOff;
     private Block railSwitchSignalOn;
-    private Block railSwitchCombinedOff;
-    private Block railSwitchCombinedOn;
     private RailsUpdateFamily railFamily;
     private RailsUpdateFamily invertFamily;
 
-    private enum ActionSource {ACTIVATE, SIGNAL};
-
+    /**
+     * Prepares blocks for future use (see code below)
+     * These block are obtained from an instance of {@link org.terasology.world.block.BlockManager}
+     */
     @Override
     public void initialise() {
-        final BlockManager blockManager = CoreRegistry.get(BlockManager.class);
         railSwitchLeverOff = blockManager.getBlock("AdditionalRails:railSwitchLeverOff");
         railSwitchLeverOn = blockManager.getBlock("AdditionalRails:railSwitchLeverOn");
         railSwitchSignalOff = blockManager.getBlock("AdditionalRails:railSwitchSignalOff");
         railSwitchSignalOn = blockManager.getBlock("AdditionalRails:railSwitchSignalOn");
-        railSwitchCombinedOff = blockManager.getBlock("AdditionalRails:railSwitchCombinedOff");
-        railSwitchCombinedOn = blockManager.getBlock("AdditionalRails:railSwitchCombinedOn");
         railFamily = (RailsUpdateFamily)blockManager.getBlockFamily("Rails:rails");
         invertFamily = (RailsUpdateFamily)blockManager.getBlockFamily("Rails:railsTBlockInverted");
     }
 
-    @ReceiveEvent(components = {BlockComponent.class, RailSwitchComponent.class})
-    public void activateAction(ActivateEvent event, EntityRef entity) {
-        RailSwitchComponent railSwitchComponent = entity.getComponent(RailSwitchComponent.class);
+    /**
+     * Updates railSwitchLever and rails around it, when user interacts the block.
+     * @param event ActivateEvent, just used to differentiate from other events
+     * @param entity The entity related to railSwitchLever
+     */
+    @ReceiveEvent(components = {BlockComponent.class, RailSwitchLeverComponent.class})
+    public void railSwitchLeverAction(ActivateEvent event, EntityRef entity, BlockComponent blockComponent, RailSwitchLeverComponent rslComponent) {
+        Vector3i blockLocation = new Vector3i(blockComponent.getPosition());
 
-        updateSwitch(event, entity, railSwitchComponent, !railSwitchComponent.isOn, ActionSource.ACTIVATE);
+        //switch the block from on to off, from off to on; rslComponent.isOn is set in block prefab
+        if (rslComponent.isOn) {
+            worldProvider.setBlock(blockLocation, railSwitchLeverOff);
+        } else {
+            worldProvider.setBlock(blockLocation, railSwitchLeverOn);
+        }
+
+        //update rails based on switch state
+        updateRails(blockLocation, rslComponent.isOn);
     }
 
-    @ReceiveEvent(components = {BlockComponent.class, RailSwitchComponent.class, SignalConsumerStatusComponent.class})
-    public void signalAction(OnChangedComponent event, EntityRef entity) {
-        SignalConsumerStatusComponent consumerStatusComponent = entity.getComponent(SignalConsumerStatusComponent.class);
-        RailSwitchComponent railSwitchComponent = entity.getComponent(RailSwitchComponent.class);
+    /**
+     * Updates railSwitchSignal and rails around it, when {@link org.terasology.signalling} signal changes its state
+     * @param event OnChangedComponent event raised by signal modyfying {@link org.terasology.signalling.components.SignalConsumerStatusComponent}
+     * @param entity The entity related to railSwitchSignal
+     */
+    @ReceiveEvent(components = {BlockComponent.class, RailSwitchSignalComponent.class, SignalConsumerStatusComponent.class})
+    public void railSwitchSignalAction(OnChangedComponent event, EntityRef entity, BlockComponent blockComponent, SignalConsumerStatusComponent scsComponent) {
+        Vector3i blockLocation = new Vector3i(blockComponent.getPosition());
+        Block block = worldProvider.getBlock(blockLocation);
 
-        if (consumerStatusComponent.hasSignal != railSwitchComponent.hasSignal) {
-            updateSwitch(event, entity, railSwitchComponent, consumerStatusComponent.hasSignal, ActionSource.SIGNAL);
+        //switch the block from on to off, from off to on based on signal
+        if (block == railSwitchSignalOn && !scsComponent.hasSignal) {
+            worldProvider.setBlock(blockLocation, railSwitchSignalOff);
+        } else if (block == railSwitchSignalOff && scsComponent.hasSignal) {
+            worldProvider.setBlock(blockLocation, railSwitchSignalOn);
         }
+
+        //update rails based on switch state
+        updateRails(blockLocation, scsComponent.hasSignal);
     }
 
-    private void updateSwitch(Event event, EntityRef entity, RailSwitchComponent oldRailComponent, boolean input, ActionSource actionSource) {
-        Vector3i blockLocation = new Vector3i(entity.getComponent(BlockComponent.class).getPosition());
-        switch (oldRailComponent.mode) {
-            case 0:
-                if (input) {
-                    railSwitchLeverOn.setKeepActive(true);
-                    worldProvider.setBlock(blockLocation, railSwitchLeverOn);
-                } else {
-                    railSwitchLeverOff.setKeepActive(true);
-                    worldProvider.setBlock(blockLocation, railSwitchLeverOff);
-                }
-                break;
-            case 1:
-                if (input) {
-                    railSwitchSignalOn.setKeepActive(true);
-                    worldProvider.setBlock(blockLocation, railSwitchSignalOn);
-                } else {
-                    railSwitchSignalOff.setKeepActive(true);
-                    worldProvider.setBlock(blockLocation, railSwitchSignalOff);
-                }
-                break;
+    /**
+     * Looks for rails around switchLocation and updates them basing on inverted bool
+     * @param switchLocation location of the switch
+     * @param inverted boolean which is false if the rail juntion should be normal, or true, if the rail juntion should be inverted
+     */
+    private void updateRails(Vector3i switchLocation, boolean inverted) {
+        //prepare the locations around the switch, where we're going to look for rails
+        Vector3i[] railLocations = {new Vector3i(switchLocation.x, switchLocation.y, switchLocation.z+1), //north
+                new Vector3i(switchLocation.x, switchLocation.y, switchLocation.z-1), //south
+                new Vector3i(switchLocation.x+1, switchLocation.y, switchLocation.z), //west
+                new Vector3i(switchLocation.x-1, switchLocation.y, switchLocation.z), //east
+                new Vector3i(switchLocation.x, switchLocation.y+1, switchLocation.z)}; //above
 
-            case 2: //TODO: railSwitch using both activate (E button) and Signalling mode
-                /*
-                SignalConsumerStatusComponent oldStatusComponent = entity.getComponent(SignalConsumerStatusComponent.class);
-                SignalConsumerStatusComponent newStatusComponent = new SignalConsumerStatusComponent();
-                RailSwitchComponent newRailComponent = new RailSwitchComponent();
+        //iterate through all the positions and change the rail's state if needed
+        for (Vector3i railLocation : railLocations) {
+            Block block = worldProvider.getBlock(railLocation);
+            EntityRef entity = block.getEntity();
 
-                if (actionSource == ActionSource.ACTIVATE) {
-                    newStatusComponent.hasSignal = oldStatusComponent.hasSignal;
-                    newRailComponent.hasSignal = oldStatusComponent.hasSignal;
-                    newRailComponent.isOn = input;
-                }
-                if (actionSource == ActionSource.SIGNAL) {
-                    newStatusComponent.hasSignal = input;
-                    newRailComponent.hasSignal = input;
-                    newRailComponent.isOn = oldRailComponent.isOn;
-                }
-                newRailComponent.mode = 2;
-
-                if (input || oldRailComponent.isOn) {
-                    railSwitchCombinedOn.setKeepActive(true);
-                    worldProvider.setBlock(blockLocation, railSwitchCombinedOn);
-
-                } else {
-                    railSwitchCombinedOff.setKeepActive(true);
-                    worldProvider.setBlock(blockLocation, railSwitchCombinedOff);
-                }
-
-                EntityRef newEntity = blockEntityRegistry.getBlockEntityAt(blockLocation);
-                newEntity.addOrSaveComponent(newRailComponent);
-                newEntity.addOrSaveComponent(newStatusComponent);
-
-                RailSwitchComponent rscTest = newEntity.getComponent(RailSwitchComponent.class);
-                SignalConsumerStatusComponent scscTest = newEntity.getComponent(SignalConsumerStatusComponent.class);
-
-                //console.addMessage("["+rscTest.mode+","+rscTest.isOn+","+rscTest.hasSignal+","+scscTest.hasSignal+"]");
-                */
-                break;
-        }
-        worldProvider.getBlock(blockLocation).setKeepActive(true);
-
-        Vector3i[] railPositions = {new Vector3i(blockLocation.x, blockLocation.y, blockLocation.z+1), //north
-                                    new Vector3i(blockLocation.x, blockLocation.y, blockLocation.z-1), //south
-                                    new Vector3i(blockLocation.x+1, blockLocation.y, blockLocation.z), //west
-                                    new Vector3i(blockLocation.x-1, blockLocation.y, blockLocation.z), //east
-                                    new Vector3i(blockLocation.x, blockLocation.y+1, blockLocation.z)}; //up
-
-        for(Vector3i vector : railPositions) {
-            Block block = worldProvider.getBlock(vector);
-            EntityRef railEntity = block.getEntity();
-            if (!railEntity.hasComponent(RailComponent.class)) {
-                continue;
+            if (!entity.hasComponent(RailComponent.class)) {
+                continue; //if the block is not a rail, go to the next iteration of the loop
             }
 
+            //following code is based on Rails' module WrenchAction
             byte connections = Byte.parseByte(block.getURI().getIdentifier().toString());
 
             if (SideBitFlag.getSides(connections).size() == 3) {
                 if (block.getBlockFamily() == railFamily || block.getBlockFamily() == invertFamily) {
-                    blockEntityRegistry.setBlockForceUpdateEntity(vector, input ? railFamily.getBlockByConnection(connections) : invertFamily.getBlockByConnection(connections));
+                    blockEntityRegistry.setBlockForceUpdateEntity(railLocation, inverted ? invertFamily.getBlockByConnection(connections) : railFamily.getBlockByConnection(connections));
                 }
             }
         }
-
     }
-
 }
-
